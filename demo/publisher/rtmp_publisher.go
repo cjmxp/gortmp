@@ -3,11 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/zhangpeihao/goflv"
-	"github.com/zhangpeihao/gortmp"
-	"github.com/zhangpeihao/log"
 	"os"
 	"time"
+
+	"github.com/zhangpeihao/goflv"
+	rtmp "github.com/zhangpeihao/gortmp"
+	"github.com/zhangpeihao/log"
 )
 
 const (
@@ -16,9 +17,9 @@ const (
 )
 
 var (
-	url         *string = flag.String("URL", "rtmp://192.168.20.111/vid3", "The rtmp url to connect.")
+	url         *string = flag.String("URL", "rtmp://video-center.alivecdn.com/AppName/StreamName?vhost=live.gz-app.com", "The rtmp url to connect.")
 	streamName  *string = flag.String("Stream", "camstream", "Stream name to play.")
-	flvFileName *string = flag.String("FLV", "", "Dump FLV into file.")
+	flvFileName *string = flag.String("FLV", "./v_4097.flv", "FLV file to publishs.")
 )
 
 type TestOutboundConnHandler struct {
@@ -32,24 +33,27 @@ var flvFile *flv.File
 
 var status uint
 
-func (handler *TestOutboundConnHandler) OnStatus() {
+func (handler *TestOutboundConnHandler) OnStatus(conn rtmp.OutboundConn) {
 	var err error
+	if obConn == nil {
+		return
+	}
 	status, err = obConn.Status()
 	fmt.Printf("@@@@@@@@@@@@@status: %d, err: %v\n", status, err)
 }
 
-func (handler *TestOutboundConnHandler) OnClosed() {
+func (handler *TestOutboundConnHandler) OnClosed(conn rtmp.Conn) {
 	fmt.Printf("@@@@@@@@@@@@@Closed\n")
 }
 
-func (handler *TestOutboundConnHandler) OnReceived(message *rtmp.Message) {
+func (handler *TestOutboundConnHandler) OnReceived(conn rtmp.Conn, message *rtmp.Message) {
 }
 
-func (handler *TestOutboundConnHandler) OnReceivedCommand(command *rtmp.Command) {
-	fmt.Printf("ReceviedCommand: %+v\n", command)
+func (handler *TestOutboundConnHandler) OnReceivedRtmpCommand(conn rtmp.Conn, command *rtmp.Command) {
+	fmt.Printf("ReceviedRtmpCommand: %+v\n", command)
 }
 
-func (handler *TestOutboundConnHandler) OnStreamCreated(stream rtmp.OutboundStream) {
+func (handler *TestOutboundConnHandler) OnStreamCreated(conn rtmp.OutboundConn, stream rtmp.OutboundStream) {
 	fmt.Printf("Stream created: %d\n", stream.ID())
 	createStreamChan <- stream
 }
@@ -62,17 +66,19 @@ func (handler *TestOutboundConnHandler) OnPublishStart(stream rtmp.OutboundStrea
 }
 
 func publish(stream rtmp.OutboundStream) {
-
+	fmt.Println("1")
 	var err error
 	flvFile, err = flv.OpenFile(*flvFileName)
 	if err != nil {
 		fmt.Println("Open FLV dump file error:", err)
 		return
 	}
+	fmt.Println("2")
 	defer flvFile.Close()
 	startTs := uint32(0)
 	startAt := time.Now().UnixNano()
 	preTs := uint32(0)
+	fmt.Println("3")
 	for status == rtmp.OUTBOUND_CONN_STATUS_CREATE_STREAM_OK {
 		if flvFile.IsFinished() {
 			fmt.Println("@@@@@@@@@@@@@@File finished")
@@ -101,12 +107,13 @@ func publish(stream rtmp.OutboundStream) {
 		if header.Timestamp > startTs {
 			diff1 = header.Timestamp - startTs
 		} else {
-			fmt.Println("@@@@@@@@@@@@@@diff1")
+			fmt.Printf("@@@@@@@@@@@@@@diff1 header(%+v), startTs: %d\n", header, startTs)
 		}
 		if diff1 > preTs {
 			//			deltaTs = diff1 - preTs
 			preTs = diff1
 		}
+		fmt.Printf("@@@@@@@@@@@@@@diff1 header(%+v), startTs: %d\n", header, startTs)
 		if err = stream.PublishData(header.TagType, data, diff1); err != nil {
 			fmt.Println("PublishData() error:", err)
 			break
@@ -133,12 +140,14 @@ func main() {
 	createStreamChan = make(chan rtmp.OutboundStream)
 	testHandler := &TestOutboundConnHandler{}
 	fmt.Println("to dial")
+	fmt.Println("a")
 	var err error
 	obConn, err = rtmp.Dial(*url, testHandler, 100)
 	if err != nil {
 		fmt.Println("Dial error", err)
 		os.Exit(-1)
 	}
+	fmt.Println("b")
 	defer obConn.Close()
 	fmt.Println("to connect")
 	err = obConn.Connect()
@@ -146,6 +155,7 @@ func main() {
 		fmt.Printf("Connect error: %s", err.Error())
 		os.Exit(-1)
 	}
+	fmt.Println("c")
 	for {
 		select {
 		case stream := <-createStreamChan:

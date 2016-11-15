@@ -1,4 +1,4 @@
-package rtmp
+package gortmp
 
 import (
 	"bytes"
@@ -149,6 +149,21 @@ var testHeaderCases = []TestHeaderCase{
 		false,
 	},
 	{
+		"Type 3",
+		[]byte{}, // No data
+		[]byte{0xc3},
+		Header{
+			Fmt:               0x03,
+			ChunkStreamID:     3,
+			Timestamp:         0x21,
+			MessageLength:     0x12,
+			MessageTypeID:     0x13,
+			MessageStreamID:   0x04,
+			ExtendedTimestamp: 0,
+		},
+		false,
+	},
+	{
 		"Type 2 - with externed timestamp",
 		[]byte{
 			0xff, 0xff, 0xff, // Timestamp
@@ -166,21 +181,6 @@ var testHeaderCases = []TestHeaderCase{
 		},
 		false,
 	},
-	{
-		"Type 3",
-		[]byte{0x21, 0x00, 0x00, 0x00}, // Todo: Test with FMS
-		[]byte{0xc3},
-		Header{
-			Fmt:               0x03,
-			ChunkStreamID:     3,
-			Timestamp:         0xffffff,
-			MessageLength:     0x12,
-			MessageTypeID:     0x13,
-			MessageStreamID:   0x04,
-			ExtendedTimestamp: 0x21000000,
-		},
-		false,
-	},
 }
 
 func TestReadHeader(t *testing.T) {
@@ -188,7 +188,7 @@ func TestReadHeader(t *testing.T) {
 	header := &Header{}
 	for _, c := range testHeaderCases {
 		buf := bytes.NewReader(c.data)
-		n, err := header.ReadHeader(buf, c.header.Fmt, c.header.ChunkStreamID)
+		n, err := header.ReadHeader(buf, c.header.Fmt, c.header.ChunkStreamID, nil)
 		if err != nil {
 			t.Errorf("TestReadHeader(%s)\n\t%v\nerror: %s", c.name, c.header, err.Error())
 			continue

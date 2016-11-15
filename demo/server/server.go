@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/zhangpeihao/goflv"
-	"github.com/zhangpeihao/gortmp"
+	rtmp "github.com/zhangpeihao/gortmp"
 	"github.com/zhangpeihao/log"
 	"os"
 	"os/signal"
@@ -34,30 +34,30 @@ var (
 type ServerHandler struct{}
 
 // InboundConn handler funcions
-func (handler *ServerHandler) OnStatus() {
+func (handler *ServerHandler) OnStatus(conn rtmp.InboundConn) {
 	status, err := g_ibConn.Status()
 	fmt.Printf("@@@@@@@@@@@@@status: %d, err: %v\n", status, err)
 }
 
-func (handler *ServerHandler) OnStreamCreated(stream rtmp.InboundStream) {
+func (handler *ServerHandler) OnStreamCreated(conn rtmp.InboundConn, stream rtmp.InboundStream) {
 	fmt.Printf("Stream created: %d\n", stream.ID())
 	stream.Attach(handler)
 }
 
-func (handler *ServerHandler) OnStreamClosed(stream rtmp.InboundStream) {
+func (handler *ServerHandler) OnStreamClosed(conn rtmp.InboundConn, stream rtmp.InboundStream) {
 	fmt.Printf("Stream closed: %d\n", stream.ID())
 }
 
 // Conn handler functions
-func (handler *ServerHandler) OnClosed() {
+func (handler *ServerHandler) OnClosed(conn rtmp.Conn) {
 	fmt.Printf("@@@@@@@@@@@@@Closed\n")
 }
 
-func (handler *ServerHandler) OnReceived(message *rtmp.Message) {
+func (handler *ServerHandler) OnReceived(conn rtmp.Conn, message *rtmp.Message) {
 }
 
-func (handler *ServerHandler) OnReceivedCommand(command *rtmp.Command) {
-	fmt.Printf("ReceviedCommand: %+v\n", command)
+func (handler *ServerHandler) OnReceivedRtmpCommand(conn rtmp.Conn, command *rtmp.Command) {
+	fmt.Printf("ReceviedRtmpCommand: %+v\n", command)
 }
 
 // Stream handle functions

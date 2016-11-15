@@ -1,10 +1,11 @@
 // Copyright 2013, zhangpeihao All rights reserved.
 
-package rtmp
+package gortmp
 
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"github.com/zhangpeihao/goamf"
@@ -26,9 +27,9 @@ const (
 type OutboundConnHandler interface {
 	ConnHandler
 	// When connection status changed
-	OnStatus()
+	OnStatus(obConn OutboundConn)
 	// On stream created
-	OnStreamCreated(stream OutboundStream)
+	OnStreamCreated(obConn OutboundConn, stream OutboundStream)
 }
 
 type OutboundConn interface {
@@ -44,9 +45,9 @@ type OutboundConn interface {
 	Status() (uint, error)
 	// Send a message
 	Send(message *Message) error
-	// Calls a command or method on Flash Media Server 
+	// Calls a command or method on Flash Media Server
 	// or on an application server running Flash Remoting.
-	Call(customParameters ...interface{}) (err error)
+	Call(name string, customParameters ...interface{}) (err error)
 	// Get network connect instance
 	Conn() Conn
 }
@@ -72,10 +73,15 @@ func Dial(url string, handler OutboundConnHandler, maxChannelNumber int) (Outbou
 	if err != nil {
 		return nil, err
 	}
-	if rtmpURL.protocol != "rtmp" {
-		return nil, errors.New(fmt.Sprintf("Unsupport protocol %s", rtmpURL.protocol))
+	var c net.Conn
+	switch rtmpURL.protocol {
+	case "rtmp":
+		c, err = net.Dial("tcp", fmt.Sprintf("%s:%d", rtmpURL.host, rtmpURL.port))
+	case "rtmps":
+		c, err = tls.Dial("tcp", fmt.Sprintf("%s:%d", rtmpURL.host, rtmpURL.port), &tls.Config{InsecureSkipVerify: true})
+	default:
+		err = errors.New(fmt.Sprintf("Unsupport protocol %s", rtmpURL.protocol))
 	}
-	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", rtmpURL.host, rtmpURL.port))
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +92,7 @@ func Dial(url string, handler OutboundConnHandler, maxChannelNumber int) (Outbou
 	}
 	br := bufio.NewReader(c)
 	bw := bufio.NewWriter(c)
-	timeout := time.Duration(10) * time.Second
+	timeout := time.Duration(10*time.Second)
 	err = Handshake(c, br, bw, timeout)
 	//err = HandshakeSample(c, br, bw, timeout)
 	if err == nil {
@@ -100,6 +106,7 @@ func Dial(url string, handler OutboundConnHandler, maxChannelNumber int) (Outbou
 			transactions: make(map[uint32]string),
 			streams:      make(map[uint32]OutboundStream),
 		}
+		obConn.handler.OnStatus(obConn)
 		obConn.conn = NewConn(c, br, bw, obConn, maxChannelNumber)
 		return obConn, nil
 	}
@@ -237,9 +244,11 @@ func (obConn *outboundConn) Close() {
 	for _, stream := range obConn.streams {
 		stream.Close()
 	}
-	time.Sleep(time.Second)
 	obConn.status = OUTBOUND_CONN_STATUS_CLOSE
-	obConn.conn.Close()
+	go func() {
+		time.Sleep(time.Second)
+		obConn.conn.Close()
+	}()
 }
 
 // URL to connect
@@ -253,19 +262,19 @@ func (obConn *outboundConn) Status() (uint, error) {
 }
 
 // Callback when recieved message. Audio & Video data
-func (obConn *outboundConn) OnReceived(message *Message) {
+func (obConn *outboundConn) OnReceived(conn Conn, message *Message) {
 	stream, found := obConn.streams[message.StreamID]
 	if found {
 		if !stream.Received(message) {
-			obConn.handler.OnReceived(message)
+			obConn.handler.OnReceived(conn, message)
 		}
 	} else {
-		obConn.handler.OnReceived(message)
+		obConn.handler.OnReceived(conn, message)
 	}
 }
 
 // Callback when recieved message.
-func (obConn *outboundConn) OnReceivedCommand(command *Command) {
+func (obConn *outboundConn) OnReceivedRtmpCommand(conn Conn, command *Command) {
 	command.Dump()
 	switch command.Name {
 	case "_result":
@@ -282,7 +291,7 @@ func (obConn *outboundConn) OnReceivedCommand(command *Command) {
 							//time.Sleep(time.Duration(200) * time.Millisecond)
 							obConn.conn.SetWindowAcknowledgementSize()
 							obConn.status = OUTBOUND_CONN_STATUS_CONNECT_OK
-							obConn.handler.OnStatus()
+							obConn.handler.OnStatus(obConn)
 							obConn.status = OUTBOUND_CONN_STATUS_CREATE_STREAM
 							obConn.CreateStream()
 						}
@@ -295,7 +304,7 @@ func (obConn *outboundConn) OnReceivedCommand(command *Command) {
 						newChunkStream, err := obConn.conn.CreateMediaChunkStream()
 						if err != nil {
 							logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
-								"outboundConn::ReceivedCommand() CreateMediaChunkStream err:", err)
+								"outboundConn::ReceivedRtmpCommand() CreateMediaChunkStream err:", err)
 							return
 						}
 						stream := &outboundStream{
@@ -305,8 +314,8 @@ func (obConn *outboundConn) OnReceivedCommand(command *Command) {
 						}
 						obConn.streams[stream.ID()] = stream
 						obConn.status = OUTBOUND_CONN_STATUS_CREATE_STREAM_OK
-						obConn.handler.OnStatus()
-						obConn.handler.OnStreamCreated(stream)
+						obConn.handler.OnStatus(obConn)
+						obConn.handler.OnStreamCreated(obConn, stream)
 					}
 				}
 			}
@@ -323,12 +332,14 @@ func (obConn *outboundConn) OnReceivedCommand(command *Command) {
 		}
 	case "onBWCheck":
 	}
+	obConn.handler.OnReceivedRtmpCommand(obConn.conn, command)
 }
 
 // Connection closed
-func (obConn *outboundConn) OnClosed() {
+func (obConn *outboundConn) OnClosed(conn Conn) {
 	obConn.status = OUTBOUND_CONN_STATUS_CLOSE
-	obConn.handler.OnStatus()
+	obConn.handler.OnStatus(obConn)
+	obConn.handler.OnClosed(conn)
 }
 
 // Create a stream
@@ -370,10 +381,43 @@ func (obConn *outboundConn) Send(message *Message) error {
 	return obConn.conn.Send(message)
 }
 
-// Calls a command or method on Flash Media Server 
+// Calls a command or method on Flash Media Server
 // or on an application server running Flash Remoting.
-func (obConn *outboundConn) Call(customParameters ...interface{}) (err error) {
-	return errors.New("Unimplemented")
+func (obConn *outboundConn) Call(name string, customParameters ...interface{}) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = r.(error)
+			if obConn.err == nil {
+				obConn.err = err
+			}
+		}
+	}()
+	// Create command
+	transactionID := obConn.conn.NewTransactionID()
+	cmd := &Command{
+		IsFlex:        false,
+		Name:          name,
+		TransactionID: transactionID,
+		Objects:       make([]interface{}, 1+len(customParameters)),
+	}
+	cmd.Objects[0] = nil
+	for index, param := range customParameters {
+		cmd.Objects[index+1] = param
+	}
+	buf := new(bytes.Buffer)
+	err = cmd.Write(buf)
+	CheckError(err, "Call() Create command")
+	obConn.transactions[transactionID] = name
+
+	message := &Message{
+		ChunkStreamID: CS_ID_COMMAND,
+		Type:          COMMAND_AMF0,
+		Size:          uint32(buf.Len()),
+		Buf:           buf,
+	}
+	message.Dump(name)
+	return obConn.conn.Send(message)
+
 }
 
 // Get network connect instance

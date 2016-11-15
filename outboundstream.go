@@ -1,6 +1,6 @@
 // Copyright 2013, zhangpeihao All rights reserved.
 
-package rtmp
+package gortmp
 
 import (
 	"errors"
@@ -47,6 +47,8 @@ type OutboundStream interface {
 	PublishVideoData(data []byte, deltaTimestamp uint32) error
 	// Publish data
 	PublishData(dataType uint8, data []byte, deltaTimestamp uint32) error
+	// Call
+	Call(name string, customParameters ...interface{}) error
 }
 
 // A publish stream
@@ -144,13 +146,11 @@ func (stream *outboundStream) Publish(streamName, howToPublish string) (err erro
 func (stream *outboundStream) Play(streamName string, start, duration *uint32, reset *bool) (err error) {
 	conn := stream.conn.Conn()
 	// Keng-die: in stream transaction ID always been 0
-	// Get transaction ID
-	transactionID := conn.NewTransactionID()
 	// Create play command
 	cmd := &Command{
 		IsFlex:        false,
 		Name:          "play",
-		TransactionID: transactionID,
+		TransactionID: 0,
 		Objects:       make([]interface{}, 2),
 	}
 	cmd.Objects[0] = nil
@@ -196,6 +196,41 @@ func (stream *outboundStream) Play(streamName string, start, duration *uint32, r
 	return nil
 }
 
+func (stream *outboundStream) Call(name string, customParameters ...interface{}) (err error) {
+	conn := stream.conn.Conn()
+	// Create play command
+	cmd := &Command{
+		IsFlex:        false,
+		Name:          name,
+		TransactionID: 0,
+		Objects:       make([]interface{}, 1+len(customParameters)),
+	}
+	cmd.Objects[0] = nil
+	for index, param := range customParameters {
+		cmd.Objects[index+1] = param
+	}
+
+	// Construct message
+	message := NewMessage(stream.chunkStreamID, COMMAND_AMF0, stream.id, 0, nil)
+	if err = cmd.Write(message.Buf); err != nil {
+		return
+	}
+	message.Dump(name)
+
+	err = conn.Send(message)
+	if err != nil {
+		return
+	}
+
+	// Set Buffer Length
+	// Buffer length
+	if stream.bufferLength < MIN_BUFFER_LENGTH {
+		stream.bufferLength = MIN_BUFFER_LENGTH
+	}
+	stream.conn.Conn().SetStreamBufferSize(stream.id, stream.bufferLength)
+	return nil
+}
+
 func (stream *outboundStream) Received(message *Message) bool {
 	if message.Type == VIDEO_TYPE || message.Type == AUDIO_TYPE {
 		return false
@@ -207,21 +242,21 @@ func (stream *outboundStream) Received(message *Message) bool {
 			cmd.IsFlex = true
 			_, err = message.Buf.ReadByte()
 			if err != nil {
-				logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
+				logger.ModulePrintln(logHandler, log.LOG_LEVEL_WARNING,
 					"outboundStream::Received() Read first in flex commad err:", err)
 				return true
 			}
 		}
 		cmd.Name, err = amf.ReadString(message.Buf)
 		if err != nil {
-			logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
+			logger.ModulePrintln(logHandler, log.LOG_LEVEL_WARNING,
 				"outboundStream::Received() AMF0 Read name err:", err)
 			return true
 		}
 		var transactionID float64
 		transactionID, err = amf.ReadDouble(message.Buf)
 		if err != nil {
-			logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
+			logger.ModulePrintln(logHandler, log.LOG_LEVEL_WARNING,
 				"outboundStream::Received() AMF0 Read transactionID err:", err)
 			return true
 		}
@@ -230,7 +265,7 @@ func (stream *outboundStream) Received(message *Message) bool {
 		for message.Buf.Len() > 0 {
 			object, err = amf.ReadValue(message.Buf)
 			if err != nil {
-				logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
+				logger.ModulePrintln(logHandler, log.LOG_LEVEL_WARNING,
 					"outboundStream::Received() AMF0 Read object err:", err)
 				return true
 			}
@@ -243,6 +278,9 @@ func (stream *outboundStream) Received(message *Message) bool {
 			return stream.onMetaData(cmd)
 		case "onTimeCoordInfo":
 			return stream.onTimeCoordInfo(cmd)
+		default:
+			logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
+				"outboundStream::Received() Unknown command: %s\n", cmd.Name)
 		}
 	}
 	return false

@@ -1,6 +1,6 @@
 // Copyright 2013, zhangpeihao All rights reserved.
 
-package rtmp
+package gortmp
 
 import (
 	"bufio"
@@ -10,11 +10,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/zhangpeihao/log"
 	"io"
 	"math/rand"
 	"net"
 	"time"
+
+	"github.com/zhangpeihao/log"
 )
 
 const (
@@ -272,6 +273,10 @@ func Handshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dura
 	err = bw.Flush()
 	CheckError(err, "Handshake() Flush C2")
 
+	if timeout > 0 {
+		c.SetDeadline(time.Time{})
+	}
+
 	return
 }
 
@@ -352,6 +357,7 @@ func SHandshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dur
 	// Send S2
 	_, err = bw.Write(s2)
 	CheckError(err, "SHandshake() Send S2")
+
 	if timeout > 0 {
 		c.SetWriteDeadline(time.Now().Add(timeout))
 	}
@@ -366,5 +372,8 @@ func SHandshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dur
 	_, err = io.ReadAtLeast(br, c2, RTMP_SIG_SIZE)
 	CheckError(err, "SHandshake() Read C2")
 	// TODO: check C2
+	if timeout > 0 {
+		c.SetDeadline(time.Time{})
+	}
 	return
 }
